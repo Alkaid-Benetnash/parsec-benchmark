@@ -29,6 +29,9 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # CHANGELOG
+# 
+# 2022/12/12
+#  - Add thread oversubscription related options
 #
 # From PARSEC 2.1 to PARSEC 3.0:
 #  - Added package configuration files and eliminated central parsec.conf file
@@ -75,7 +78,6 @@ create_log="TRUE"
 
 # Output prefix to use
 oprefix="[PARSEC]"
-
 
 
 #################################################################
@@ -253,6 +255,35 @@ function parsec_init {
   done
 }
 
+# numactl_gen_corelist
+#
+# Generate the processor list of the "-C" option
+#
+# Arguments:
+# $1: the number of cores from the NUMA node 0
+# $2: the numa memory node id
+# return: a core id list like "0-10,15-20"
+function numactl_gen_corelist {
+  NCORES=$1
+  NUMAMEMNODE=$2
+  # read machine specific configurations
+  NUMA0CPUs=$(lscpu -p=node,CPU | grep "${NUMAMEMNODE}," | cut -d ',' -f2 | head -n ${NCORES})
+  corelist=""
+  range_first=""
+  while read cpuid; do
+    if [ -z ${range_first} ]; then
+      range_first=$cpuid; range_last=${cpuid}; continue;
+    fi
+    if [[ $cpuid -ne $(($range_last + 1)) ]]; then
+      corelist="${corelist}${corelist:+,}${range_first}-${range_last}";
+      range_first=$cpuid; range_last=$cpuid;
+    else
+      : $((range_last++))
+    fi
+  done <<< "${NUMA0CPUs}"
+  echo "${corelist}${corelist:+,}${range_first}-${range_last}"
+}
+
 # process_args
 #
 # Process args and setup argument-dependent environment
@@ -265,6 +296,8 @@ function process_args {
   default_rundir="${PARSECDIR}"
   default_inputsize="test"
   default_nthreads="1"
+  default_ncores="0"
+  default_numamemnode="0"
   default_submit="time"
 
   # Usage
@@ -282,7 +315,9 @@ Options:
     -d RUNDIR        Use directory RUNDIR as root in which to run the
                      benchmarks.
     -i INPUT         The input to use to run the benchmarks. Default: '$default_inputsize'
-    -n THREADS       The minimum number of threads to use. Default: '$default_nthreads'
+    -n THREADS       The minimum number of threads to use. 'Nx' specifies oversubscription  proportional to the CORES. Default: '$default_nthreads'
+    -C CORES         The number of cores to set CPU affinity. 0 means unlimited.  Default: '$default_ncores'
+    --numamem        The numa node id to allocate memory from. Default: '$default_numamemnode'
     -s SUBMIT        Command to use to submit the benchmark for execution.
                      Default: '$default_submit'
     -x EXTENSION     Extension to append to platform descriptor string.
@@ -310,6 +345,9 @@ Actions:
     'status'         Shows a summary of the current status of the PARSEC
                      installation.
     'info'           List available packages and configurations.
+
+Environment Variables:
+    'DRYRUN'         Only print the commandline without executing it
 
 
 Examples (1) [Compatible to PARSEC 2.1 but Extended]:
@@ -362,7 +400,13 @@ Examples (3) [NEW: SPLASH-2 Suite and SPLASH-2x Suite]:
     - Run benchmark 'fft' from SPLASH-2x w/ input 'simsmall' and 4 threads:
         $me -a run -p splash2x.fft -i simsmall -n 4
     - Do a full cleanup for SPLASH-2 suite
-        $me -a fullclean -p splash2"
+        $me -a fullclean -p splash2
+
+Examples (4) [NEW: Thread oversubscription experiments]:
+    - Specify thread oversubscription as a ratio of the allocated cores
+        $me -a run -p parsec.freqminer -i native -n 2x -C 16
+    - Use dryrun to print cmdline and also omit the submitter to work with vtune
+        DRYRUN=1 $me -a run -p parsec.freqminer -i native -n 2x -C 16 -k -s ' '"
 
   # Define valid actions
   valid_actions="build run clean uninstall fullclean fulluninstall status info"
@@ -377,9 +421,11 @@ Examples (3) [NEW: SPLASH-2 Suite and SPLASH-2x Suite]:
   inputsize=""
   netmode=""
   nthreads=""
+  ncores=""
   userthreads=""
   rxthreads=""
   submit=""
+  numactl=""
   extension=""
   extcmd=""
   keep_rundir=""
@@ -438,6 +484,22 @@ Examples (3) [NEW: SPLASH-2 Suite and SPLASH-2x Suite]:
         fi
         need_arg_for="-n"
         parsemode="NTHREADS";;
+      "-C" )
+        if [ ! -z "${need_arg_for}" ]; then
+          echo "${oprefix} Error: ${parsemode} expected between '${need_arg_for}' and '-C'"
+          echo "${usage}"
+          exit 1
+        fi
+        need_arg_for="-C"
+        parsemode="NCORES";;
+      "--numamem" )
+        if [ ! -z "${need_arg_for}" ]; then
+          echo "${oprefix} Error: ${parsemode} expected between '${need_arg_for}' and '--numamem'"
+          echo "${usage}"
+          exit 1
+        fi
+        need_arg_for="--numamem"
+        parsemode="NUMAMEMNODE";;
       "-t" )
         if [ ! -z "${need_arg_for}" ]; then
           echo "${oprefix} Error: ${parsemode} expected between '${need_arg_for}' and '-t'"
@@ -499,7 +561,7 @@ Examples (3) [NEW: SPLASH-2 Suite and SPLASH-2x Suite]:
       "-l" )
 	create_log="FALSE";;
      *    )
-        if [ ${arg:0:1} == "-" ]; then
+        if [ "${arg:0:1}" == "-" ]; then
           echo "${oprefix} Error: Unknown argument '${arg}'"
           echo "${usage}"
           exit 1
@@ -575,14 +637,15 @@ Examples (3) [NEW: SPLASH-2 Suite and SPLASH-2x Suite]:
             inputsize="${arg}";;
           "NTHREADS" )
             parsemode="none"
-            declare -i nthreads
-            nthreads="${arg}"
-            # Note: This check also filters out strings (nthreads==0 in that case)
-            if [ "${nthreads}" -lt "1" ]; then
-              echo "${oprefix} Error: Illegal number of threads: '${arg}'."
-              echo "${usage}"
-              exit 1
-            fi;;
+            nthreads="${arg}";;
+          "NCORES" )
+            parsemode="none"
+            declare -i ncores
+            ncores="${arg}";;
+          "NUMAMEMNODE" )
+            parsemode="none"
+            declare -i numamemnode
+            numamemnode="${arg}";;
           "USERTHREADS" )
             parsemode="none"
             userthreads="${arg}"
@@ -605,7 +668,7 @@ Examples (3) [NEW: SPLASH-2 Suite and SPLASH-2x Suite]:
             parsemode="none"
             # Check whether specified program exists
             cmd=$(echo "${arg}" | awk '{print $1}')
-            if [ ! -e "${cmd}" ]; then
+            if [[ (! -z "${cmd}") && (! -e "${cmd}") ]]; then
               # Check whether program is in path and give it a second try
               cmd=$(which ${cmd}); rv=$?
               if [ ! $rv -eq 0 ]; then
@@ -614,7 +677,7 @@ Examples (3) [NEW: SPLASH-2 Suite and SPLASH-2x Suite]:
               fi
             fi
             # Check whether specified file is executable
-            if [ ! -x "${cmd}" ]; then
+            if [[ (! -z "${cmd}") && (! -x "${cmd}") ]]; then
               echo "${oprefix} Error: '${arg}' is not executable."
               exit 1
             fi
@@ -676,12 +739,40 @@ Examples (3) [NEW: SPLASH-2 Suite and SPLASH-2x Suite]:
     done
   fi
 
+  # Set NUMAMEMNODE
+  if [ -z "${numamemnode}" ]; then
+    NUMAMEMNODE="${default_numamemnode}"
+  else
+    NUMAMEMNODE="${numamemnode}"
+  fi
+  # Set NCORES
+  # Always set NCORES before NTHREADS because NTHREADS might need to scale based on NCORES
+  if [ -z "${ncores}" ]; then
+    # Use default value
+    NCORES="${default_ncores}"
+  else
+    NCORES="${ncores}"
+  fi
+  if [ "${NCORES}" -gt "0" ]; then
+    numactl="numactl -C $(numactl_gen_corelist ${NCORES} ${NUMAMEMNODE}) -m ${NUMAMEMNODE}"
+  fi
   # Set NTHREADS
   if [ -z "${nthreads}" ]; then
     # Use default value
     NTHREADS="${default_nthreads}"
   else
     NTHREADS="${nthreads}"
+  fi
+  # Handle the potentional "Nx" factor format of the NTHREADS
+  if [ "${nthreads: -1: 1}" == "x" ]; then
+    NTHREADS=$((${nthreads:0:$((${#nthreads}-1))}*${NCORES}))
+  fi
+  declare -i NTHREADS=${NTHREADS}
+  # Note: This check also filters out strings (nthreads==0 in that case)
+  if [ "${NTHREADS}" -lt "1" ]; then
+    echo "${oprefix} Error: Illegal number of threads: '${arg}'."
+    echo "${usage}"
+    exit 1
   fi
 
   # Set rundir
@@ -1216,11 +1307,17 @@ function run_benchmark {
       UPTCPIP_RX_THREADS=1
       export UPTCPIP_RX_THREADS
   fi 
-  eval cmd="\"${submit} ${bmexec} ${bmexec_args}\""
+  eval cmd="\"${numactl} ${submit} ${bmexec} ${bmexec_args}\""
   echo "${oprefix} Running '${cmd}':" | ${TEE} ${log}
-  echo "${oprefix} [---------- Beginning of output ----------]" | ${TEE} ${log}
-  (eval ${cmd} 2>&1) 2>&1 | ${TEE} ${bmrundir}/benchmark.out | ${TEE} ${log}
-  echo "${oprefix} [----------    End of output    ----------]" | ${TEE} ${log}
+  if [ -z "${DRYRUN}" ]; then
+    echo "${oprefix} [---------- Beginning of output ----------]" | ${TEE} ${log}
+    (eval ${cmd} 2>&1) 2>&1 | ${TEE} ${bmrundir}/benchmark.out | ${TEE} ${log}
+    echo "${oprefix} [----------    End of output    ----------]" | ${TEE} ${log}
+  else
+    echo "${oprefix} Dryrun, deleting log ${log}"
+    rm ${log}
+    exit 0
+  fi
 
 
   # Unpack reference output and compare
