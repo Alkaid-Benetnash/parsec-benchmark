@@ -324,6 +324,7 @@ Options:
                      Default: none
     -k               Keep & use run directory as found, do not unpack inputs for
                      benchmark execution. Assume everything is already set up.
+    --unpack         Unpack inputs for benchmark execution. Work with -k to only unpack inputs when necessary
     -m NETMODE       Execution mode for network workloads. 
                      NETMODE can be either 'server' or 'client'. 
     -t THREADS       The number of user threads talking to the upTCP/IP stack. Default: '1'
@@ -429,6 +430,7 @@ Examples (4) [NEW: Thread oversubscription experiments]:
   extension=""
   extcmd=""
   keep_rundir=""
+  allow_unpack=""
   while [ ! -z "$1" ]; do
     arg="$1"
     case "${arg}" in
@@ -555,6 +557,13 @@ Examples (4) [NEW: Thread oversubscription experiments]:
           exit 1
         fi
         keep_rundir="yes";;
+      "--unpack" )
+        if [ ! -z "${need_arg_for}" ]; then
+          echo "${oprefix} Error: ${parsemode} expected between '${need_arg_for}' and '--unpack'"
+          echo "${usage}"
+          exit 1
+        fi
+        allow_unpack="yes";;
       "-h" )
         echo "${usage}"
         exit 0;;
@@ -1263,19 +1272,26 @@ function run_benchmark {
   #  exit 1
   #fi
 
-  if [ "${keep_rundir}" == "yes" ]; then
-    # Keep run directory, just check that it exists
+  # below is new code
+  # make sure there will be no rundir when we need to create one
+  if [[ ("${keep_rundir}" == "no") && (-d "${bmrundir}") ]]; then
+      echo "${oprefix} deleting old run directory." | ${tee} ${log}
+      ${rm} ${bmrundir} | ${tee} ${log}
+  fi
+  if [[ ("${keep_rundir}" == "yes") && (!(("${allow_unpack}" == "yes") && (! -d "${bmrundir}"))) ]]; then
+    # if we want to keep the rundir and (there does not exist one or we are not allowed to create a new one)
+    # note that we should complain if there is not a valid rundir
     if [ ! -d "${bmrundir}" ]; then
       echo "${oprefix} Error: Cannot keep run directory because it does not exist." | ${TEE} ${log} 
       exit 1
     fi
     echo "${oprefix} Keeping old run directory." | ${TEE} ${log}
     pushd "${bmrundir}" > /dev/null
-  else 
+  else
     # Set up run directory
     if [ -d "${bmrundir}" ]; then
-      echo "${oprefix} Deleting old run directory." | ${TEE} ${log}
-      ${RM} ${bmrundir} | ${TEE} ${log}
+      echo "${oprefix} deleting old run directory." | ${tee} ${log}
+      ${rm} ${bmrundir} | ${tee} ${log}
     fi
 
     echo "${oprefix} Setting up run directory." | ${TEE} ${log}
