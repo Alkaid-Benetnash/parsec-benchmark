@@ -52,7 +52,11 @@ def plot(args):
             errorbars = []
             for ncores, ncoresDF in ncoresGroups:
                 # ncoresDF should only contains dataframes of different trials with the same expr configurations
-                fieldVals = ncoresDF[field]
+                validLoc = ncoresDF['note'].isnull()
+                if not validLoc.any():
+                    # skip configurations that have no valid data points
+                    continue
+                fieldVals = ncoresDF[validLoc][field]
                 xaxis.append(ncores)
                 yaxis.append(fieldVals.mean())
                 errorbars.append(fieldVals.std())
@@ -66,13 +70,15 @@ def plot(args):
             ax.set_xlabel("ncores")
             ax.set_ylabel(f"{field} ({csvField.unit})")
             ax.legend()
-            ax.annotate(tw.fill(f"{csvField.key}: {csvField.description}", width=100), (0, 0), (0, -40), xycoords="axes fraction", textcoords="offset points", va="top", wrap=True)
+            ax.annotate(tw.fill(f"{csvField.key}: {csvField.description}", width=100),
+                        (0, 0), (0, -40), xycoords="axes fraction", textcoords="offset points", va="top", wrap=True)
             allNcores = list(ncoresGroups.groups.keys())
             ax.set_xticks(allNcores, labels=allNcores)
     outdir = Path(args.dir)
     outdir.mkdir(exist_ok=True)
     fig.suptitle(f"{exprName}", fontsize="xx-large")
-    fig.savefig(outdir / f"{exprName}.plot.png", dpi=300, format="png", bbox_inches="tight")
+    fig.savefig(outdir / f"{exprName}.plot.png",
+                dpi=300, format="png", bbox_inches="tight")
     # plt.show()
 
 
