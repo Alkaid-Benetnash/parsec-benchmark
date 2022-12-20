@@ -47,10 +47,10 @@ def plot(args):
         csvData.drop(0)
     colorCycler = cycle(mpl.colormaps['tab10'].colors)
     for oversub, oversubDF in csvData.groupby("oversub"):
+        color = next(colorCycler)
         ncoresGroups = oversubDF.groupby("ncores")
         for ((ax,), field) in zip(axs, args.fields):
             # Fill in individual data points
-            color = next(colorCycler)
             xaxis = []
             yaxis = []
             errorbars = []
