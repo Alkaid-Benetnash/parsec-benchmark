@@ -24,10 +24,6 @@ def buildParser():
     return parser.parse_args()
 
 
-DEFAULT_FIELD_UNITS = {
-    "elapsed": "sec",
-}
-
 FIGWIDTH = 9
 FIGHEIGHT = 6
 
@@ -65,11 +61,11 @@ def plot(args):
             for x, y, err in zip(xaxis, yaxis, errorbars):
                 ax.errorbar(x, y, err, capsize=2, color=color)
             # draw subplot metadata
+            csvField = AllCSVFieldsIndexedByKey[field]
             ax.set_title(f"ncores <-> {field}")
             ax.set_xlabel("ncores")
-            ax.set_ylabel(f"{field} ({DEFAULT_FIELD_UNITS.get(field, '')})")
+            ax.set_ylabel(f"{field} ({csvField.unit})")
             ax.legend()
-            csvField = AllCSVFieldsIndexedByKey[field]
             ax.annotate(tw.fill(f"{csvField.key}: {csvField.description}", width=100), (0, 0), (0, -40), xycoords="axes fraction", textcoords="offset points", va="top", wrap=True)
             allNcores = list(ncoresGroups.groups.keys())
             ax.set_xticks(allNcores, labels=allNcores)

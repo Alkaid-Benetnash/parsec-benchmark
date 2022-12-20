@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Dict, Callable
 
 
-@dataclass
+@dataclass(kw_only=True)
 class CSVField:
     """
     Class for tracking what each field in the CSV file is
@@ -11,9 +11,10 @@ class CSVField:
     """
     key: str
     description: str
+    unit: str = ""
 
 
-@dataclass
+@dataclass(kw_only=True)
 class GNUTimeField(CSVField):
     """
     Class for tracking resources reported by /usr/bin/time that are used in this script
@@ -23,11 +24,11 @@ class GNUTimeField(CSVField):
 
 
 ALLGNUTIMEFIELDS = [
-    GNUTimeField(key="elapsed", timeFMT="e",
+    GNUTimeField(key="elapsed", timeFMT="e", unit="sec",
                  description="Elapsed real (wall clock) time used by the process, in seconds."),
-    GNUTimeField(key="usertime", timeFMT="U",
+    GNUTimeField(key="usertime", timeFMT="U", unit="sec",
                  description="Total number of CPU-seconds that the process used directly (in user mode), in seconds."),
-    GNUTimeField(key="systime", timeFMT="S",
+    GNUTimeField(key="systime", timeFMT="S", unit="sec",
                  description="Total number of CPU-seconds used by the system on behalf of the process (in kernel mode), in seconds."),
     GNUTimeField(key="cpupercent", timeFMT="P",
                  description="Percentage of the CPU that this job got.  This is just user + system times divided by the total running time.  It also prints a percentage sign."),
@@ -50,11 +51,12 @@ RAWDATACSVFIELDS = [
 ]
 
 
-@dataclass
+@dataclass(kw_only=True)
 class DeductiveField(CSVField):
     callback: Callable[[Dict[str, str]], None]
 
 
+@dataclass(kw_only=True)
 class DeductiveNote(DeductiveField):
     key = "note"
     description = "Additonal comments regarding a trial. Introduced to report abnormal program exit status messages"
@@ -68,6 +70,7 @@ class DeductiveNote(DeductiveField):
             row["note"] = composedFields[:-1]
 
 
+@dataclass(kw_only=True)
 class DeductiveOversub(DeductiveField):
     key = "oversub"
     description = "Compute a simple oversubscription ratio"
@@ -77,6 +80,7 @@ class DeductiveOversub(DeductiveField):
         row[cls.key] = int(row["nthreads"]) // int(row["ncores"])
 
 
+@dataclass(kw_only=True)
 class DeductiveCurTimeStamp(DeductiveField):
     key = "timestamp"
     description = "Tag the current record with the current time"
