@@ -82,4 +82,7 @@ def plot(args):
 
 if __name__ == "__main__":
     args = buildParser()
+    for f in args.fields:
+        if f not in AllCSVFieldsIndexedByKey:
+            raise RuntimeError(f"field '{f}' is not a valid csv field")
     plot(args)
