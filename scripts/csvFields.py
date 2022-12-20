@@ -91,6 +91,18 @@ class DeductiveCurTimeStamp(DeductiveField):
             row[cls.key] = datetime.now().isoformat(timespec='seconds')
 
 
+@dataclass(kw_only=True)
+class DeductiveCPUTime(DeductiveField):
+    key = "cputime"
+    description = "Total number of CPU-seconds (usertime + systime)"
+    unit = "sec"
+
+    @classmethod
+    def callback(cls, row):
+        if row[cls.key] is None:
+            row[cls.key] = float(row["usertime"]) + float(row["systime"])
+
+
 """
 Note that the order of these newfields matters and one may depends on another's pass
 """
@@ -98,6 +110,7 @@ DeductiveFields = [
     DeductiveNote,
     DeductiveOversub,
     DeductiveCurTimeStamp,
+    DeductiveCPUTime,
 ]
 
 ALLCSVFIELDS = [
