@@ -83,7 +83,7 @@ class DeductiveCurTimeStamp(DeductiveField):
 
     @classmethod
     def callback(cls, row):
-        if cls.key not in row:
+        if row[cls.key] is None:
             row[cls.key] = datetime.now().isoformat(timespec='seconds')
 
 
@@ -98,7 +98,7 @@ DeductiveFields = [
 
 ALLCSVFIELDS = [
     *RAWDATACSVFIELDS,
-    *[CSVField(key=f.key, description=f.description) for f in DeductiveFields]
+    *DeductiveFields
 ]
 
 AllCSVFieldsIndexedByKey = {f.key: f for f in ALLCSVFIELDS}

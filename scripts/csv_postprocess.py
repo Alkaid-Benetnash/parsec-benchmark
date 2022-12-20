@@ -10,13 +10,14 @@ if __name__ == "__main__":
     parser.add_argument('--input', '-i', type=str, help="input csv")
     parser.add_argument('--output', '-o', type=str, help="output csv")
     args = parser.parse_args()
+    assert (args.input != args.output)
 
     incsvf = open(args.input, "r")
     inreader = csv.DictReader(incsvf)
 
     newfields = inreader.fieldnames
     for field in DeductiveFields:
-        if field not in newfields:
+        if field.key not in newfields:
             newfields.append(field.key)
     outcsvf = open(args.output, "w")
     outwriter = csv.DictWriter(outcsvf, newfields)
@@ -26,3 +27,5 @@ if __name__ == "__main__":
         for field in DeductiveFields:
             field.callback(row)
         outwriter.writerow(row)
+    incsvf.close()
+    outcsvf.close()
