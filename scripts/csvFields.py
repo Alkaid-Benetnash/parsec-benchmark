@@ -11,7 +11,11 @@ class CSVField:
     """
     key: str
     description: str
-    unit: str = ""
+    unit: str = None
+
+    @classmethod
+    def getUnitInParenthesisIfExists(cls) -> str:
+        return f"({cls.unit})" if cls.unit else ""
 
 
 @dataclass(kw_only=True)
@@ -40,13 +44,17 @@ ALLGNUTIMEFIELDS = [
                  description="Number of minor, or recoverable, page faults.  These are pages that are not valid (so they fault) but which have not yet been claimed by other virtual pages.  Thus the data in the page is still valid but the system tables must be updated."),
 ]
 
+CSVNCORES = CSVField(key="ncores",
+                     description="The number of logical CPU cores allocated to this workload.")
+CSVNTHREADS = CSVField(key="nthreads",
+                       description="The number of threads requested for this workload.")
+CSVNTRIAL = CSVField(key="ntrial",
+                     description="The identifier to distinguish repeated runs of one configuration.")
+
 RAWDATACSVFIELDS = [
-    CSVField(key="ncores",
-             description="The number of logical CPU cores allocated to this workload."),
-    CSVField(key="nthreads",
-             description="The number of threads requested for this workload."),
-    CSVField(key="ntrial",
-             description="The identifier to distinguish repeated runs of one configuration."),
+    CSVNCORES,
+    CSVNTHREADS,
+    CSVNTRIAL,
     *ALLGNUTIMEFIELDS,
 ]
 
@@ -115,7 +123,7 @@ DeductiveFields = [
 
 ALLCSVFIELDS = [
     *RAWDATACSVFIELDS,
-    *DeductiveFields
+    *DeductiveFields,
 ]
 
 AllCSVFieldsIndexedByKey = {f.key: f for f in ALLCSVFIELDS}

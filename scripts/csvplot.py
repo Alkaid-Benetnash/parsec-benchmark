@@ -4,9 +4,9 @@ import matplotlib.pyplot as plt
 import argparse
 import pandas
 from pathlib import Path
-from itertools import cycle
-from csvFields import ALLCSVFIELDS, AllCSVFieldsIndexedByKey
+from csvFields import ALLCSVFIELDS, AllCSVFieldsIndexedByKey, CSVField, CSVNCORES, DeductiveOversub
 import textwrap as tw
+from typing import List, Any
 
 
 def buildParser():
@@ -27,53 +27,64 @@ def buildParser():
 FIGWIDTH = 9
 FIGHEIGHT = 6
 
+def plotSubfig(ax: mpl.axes.Axes, df: pandas.DataFrame, xfield: CSVField, yfield: CSVField, zfield: CSVField, colors: List[Any]):
+    """
+    zfield will be drawn as different series in the figure with a legend
+    """
+    xvals = set()
+    for (zval, zsubgroup), color in zip(df.groupby(zfield.key), colors):
+        xgroups = zsubgroup.groupby(xfield.key)
+        xvals |= set(xgroups.groups.keys())
+        xaxis = []
+        yaxis = []
+        errorbars = []
+        for xval, xsubgroup in xgroups:
+            # each ysubgroup contains dataframes of different trials with the same expr configurations
+            validLoc = xsubgroup['note'].isnull()
+            if not validLoc.any():
+                # skip configurations that have no valid data points
+                continue
+            validYVals = xsubgroup[validLoc][yfield.key]
+            xaxis.append(xval)
+            yaxis.append(validYVals.mean())
+            errorbars.append(validYVals.std())
+        ax.plot(xaxis, yaxis, label=f"{zfield.key}: {zval}", marker='.', markersize=6, color=color)
+        for x, y, err in zip(xaxis, yaxis, errorbars):
+            ax.errorbar(x, y, err, capsize=2, color=color)
+        # draw subplot metadata
+        ax.set_title(f"{xfield.key}<->{yfield.key}")
+        ax.set_xlabel(xfield.key + xfield.getUnitInParenthesisIfExists())
+        ax.set_ylabel(yfield.key + yfield.getUnitInParenthesisIfExists())
+        ax.legend()
+        ax.annotate(tw.fill(f"{yfield.key}: {yfield.description}", width=100),
+                    (0, 0), (0, -40), xycoords="axes fraction", textcoords="offset points", va="top", wrap=True)
+    xvals = list(xvals)
+    ax.set_xticks(xvals, labels=[str(x) for x in xvals])
+    # revert the default behavior of subplots sharex hiding xticklabels
+    ax.tick_params(labelbottom=True)
 
 def plot(args):
     exprName = args.input.removesuffix(".csv")
     # prepare subplots
+    # each row: ncores <-> field | oversub <-> field
     fig, axs = plt.subplots(
-        len(args.fields), 1,
+        len(args.fields), 2,
         squeeze=False,
-        figsize=(FIGWIDTH, FIGHEIGHT*len(args.fields)),
-        sharex="row",
+        figsize=(FIGWIDTH * 2, FIGHEIGHT*len(args.fields)),
+        sharey="row",
+        sharex="col",
     )
     fig.subplots_adjust(hspace=0.4)
     csvData = pandas.read_csv(args.input)
     if args.drop_first:
         csvData.drop(0)
-    colorCycler = cycle(mpl.colormaps['tab10'].colors)
-    for oversub, oversubDF in csvData.groupby("oversub"):
-        color = next(colorCycler)
-        ncoresGroups = oversubDF.groupby("ncores")
-        for ((ax,), field) in zip(axs, args.fields):
-            # Fill in individual data points
-            xaxis = []
-            yaxis = []
-            errorbars = []
-            for ncores, ncoresDF in ncoresGroups:
-                # ncoresDF should only contains dataframes of different trials with the same expr configurations
-                validLoc = ncoresDF['note'].isnull()
-                if not validLoc.any():
-                    # skip configurations that have no valid data points
-                    continue
-                fieldVals = ncoresDF[validLoc][field]
-                xaxis.append(ncores)
-                yaxis.append(fieldVals.mean())
-                errorbars.append(fieldVals.std())
-            ax.plot(xaxis, yaxis, label=f"{oversub}x",
-                    marker='.', markersize=6, color=color)
-            for x, y, err in zip(xaxis, yaxis, errorbars):
-                ax.errorbar(x, y, err, capsize=2, color=color)
-            # draw subplot metadata
-            csvField = AllCSVFieldsIndexedByKey[field]
-            ax.set_title(f"ncores <-> {field}")
-            ax.set_xlabel("ncores")
-            ax.set_ylabel(f"{field} ({csvField.unit})")
-            ax.legend()
-            ax.annotate(tw.fill(f"{csvField.key}: {csvField.description}", width=100),
-                        (0, 0), (0, -40), xycoords="axes fraction", textcoords="offset points", va="top", wrap=True)
-            allNcores = list(ncoresGroups.groups.keys())
-            ax.set_xticks(allNcores, labels=allNcores)
+    colormap = mpl.colormaps['tab10'].colors
+    for ((axCol0, axCol1), field) in zip(axs, args.fields):
+        csvField = AllCSVFieldsIndexedByKey[field]
+        plotSubfig(axCol0, csvData, CSVNCORES, csvField, DeductiveOversub, colormap)
+        plotSubfig(axCol1, csvData, DeductiveOversub, csvField, CSVNCORES, colormap)
+        # revert the default behavior of subplots sharey hiding yticklabels
+        axCol1.tick_params(labelleft=True)
     outdir = Path(args.dir)
     outdir.mkdir(exist_ok=True)
     fig.suptitle(f"{exprName}", fontsize="xx-large")
