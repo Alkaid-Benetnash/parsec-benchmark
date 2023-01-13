@@ -7,6 +7,11 @@ import csv
 import itertools
 from pathlib import Path
 from csvFields import RAWDATACSVFIELDS, ALLGNUTIMEFIELDS, ALLCSVFIELDS, DeductiveFields
+import tempfile
+import os
+import time
+import random
+from datetime import datetime
 
 
 def parseCherryPickedConf(conf: str) -> List[Tuple[int]]:
@@ -55,7 +60,82 @@ def buildParser():
                         help="Verbose, print command exec output")
     parser.add_argument('--openargs', '-O', type=str, default="a",
                         help="the open arguments for the output csv (default: %(default)s)")
+    # TODO: make perf-stat configurations configurable
+    parser.add_argument('--perfstat', action="store_true",
+                        help="Enable perf-stat")
+    parser.add_argument('--perftid-sample-ratio', type=str, default="10%", help="Determine how should perf-stat sample threads. Ending with `%%` means a ratio of the total number of threads. Otherwise means to sample a fix number of threads (default: %(default)s)")
     return parser.parse_args()
+
+
+PERFCMD = ['sudo', '/usr/bin/perf']
+
+
+def getTIDofPID(pid: int) -> List[int]:
+    """
+    return a list of thread ID for a given process ID
+    """
+    ps = subprocess.run(shlex.split(
+        f"ps -L -o tid --no-headers {pid}"), capture_output=True, text=True)
+    return [int(tid) for tid in ps.stdout.splitlines()]
+
+
+def launchTest(args, package: str, ncores: int, oversub: int, trialID: int):
+    """
+    @param package the name of the parsec package you want to run
+    @param ncores how many logical CPU cores should be allocated
+    @param oversub how many thread oversubscription should be emulated
+    @param trialID an identifier for the current run among other runs with the same configuration
+    Assumptions:
+    1. The args.time_temp will be available for processing after this function returns
+    2. PERFCMD can be called without user interaction (e.g., no sudo prompt)
+       sample sudoers: "${USER} ALL=(root:root) NOPASSWD:/usr/bin/perf, NOPASSWD:/usr/bin/chown"
+    """
+    pidfile = tempfile.NamedTemporaryFile(mode="w+")
+    cmd = [
+        "parsecmgmt", "-a", "run", "-p", package, "-i", "native",
+        "-n", f"{oversub}x", "-C", f"{ncores}",
+        "-d", args.rundir, "--numamem", f"{args.numamem}",
+        "--pid", pidfile.name,
+    ]
+    if not args.perfstat:
+        # timer related prefix will break the pidpath functionality (the timing measurement process will override the actual app process)
+        non_timer_prefix = [f'{ncores}',
+                            f'{ncores * oversub}', f'{trialID}']
+        timer_fmt_str = ','.join(
+            non_timer_prefix + [f'%{f.timeFMT}' for f in ALLGNUTIMEFIELDS])
+        timer_cmd = f"/usr/bin/time -o {args.time_temp} -f {timer_fmt_str}"
+        cmd += ["-s", timer_cmd]
+    if args.keepdir:
+        cmd += ["-k", "--unpack"]
+    print(f"Executing {shlex.join(cmd)}")
+    stdout = None if args.verbose else subprocess.DEVNULL
+    if not args.dryrun:
+        parsecmgmt = subprocess.Popen(cmd, stdout=stdout)
+        if args.perfstat:
+            # FIXME: integrate the following when perf-stat with specific cpus
+            # assert args.numamem == 0, "Picking the right CPUID to track for other numa nodes has not been implemented"
+            time.sleep(2)  # wait for the pidpath file to be ready
+            pidtext = pidfile.read()
+            pid = int(pidtext)
+            try:
+                os.kill(pid, 0)
+                tids = getTIDofPID(pid)
+                if args.perftid_sample_ratio.endswith('%'):
+                    nTIDSamples = int(int(args.perftid_sample_ratio[:-1]) / 100 * len(tids))
+                else:
+                    nTIDSamples = int(args.perftid_sample_ratio)
+                sampledTIDs = random.sample(tids, nTIDSamples) if len(
+                    tids) > nTIDSamples else tids
+                sampledTIDs_str = ','.join([str(x) for x in sampledTIDs])
+                perfdataPath = f"{package}.C{ncores}.O{oversub}.{datetime.now().isoformat(timespec='seconds').replace(':','_')}.perf.data"
+                print(f"run perf on tids {sampledTIDs_str}")
+                subprocess.run(PERFCMD + shlex.split(
+                    f"stat record -e cs,instructions,inst_retired.any -I100 --quiet --per-thread -o {perfdataPath} -t {sampledTIDs_str}"))
+                subprocess.run(shlex.split(f"sudo /usr/bin/chown {os.getuid()}:{os.getgid()} {perfdataPath}"))
+            except PermissionError:
+                print("Failed to find the parasec process {pid}")
+        parsecmgmt.wait()
+    pidfile.close()
 
 
 def sweep(args, csvWriter, rowCallback: Callable[[], None]):
@@ -69,22 +149,8 @@ def sweep(args, csvWriter, rowCallback: Callable[[], None]):
     for p in packages:
         for (ncores, oversub) in allConfs:
             for trialID in range(args.ntrials):
-                non_timer_prefix = [f'{ncores}',
-                                    f'{ncores * oversub}', f'{trialID}']
-                timer_fmt_str = ','.join(
-                    non_timer_prefix + [f'%{f.timeFMT}' for f in ALLGNUTIMEFIELDS])
-                timer_cmd = f"/usr/bin/time -o {args.time_temp} -f {timer_fmt_str}"
-                cmd = [
-                    "parsecmgmt", "-a", "run", "-p", p, "-i", "native",
-                    "-n", f"{oversub}x", "-C", f"{ncores}",
-                    "-d", args.rundir, "--numamem", f"{args.numamem}", "-s", timer_cmd,
-                ]
-                if args.keepdir:
-                    cmd += ["-k", "--unpack"]
-                print(f"Executing {shlex.join(cmd)}")
-                stdout = None if args.verbose else subprocess.DEVNULL
-                if not args.dryrun:
-                    subprocess.run(cmd, stdout=stdout)
+                launchTest(args, p, ncores, oversub, trialID)
+                if not args.dryrun and not args.perfstat:
                     with open(args.time_temp, "r") as f:
                         record_dict = {}
                         time_records = f.read().strip().split(',')
