@@ -298,7 +298,7 @@ function process_args {
   default_nthreads="1"
   default_ncores="0"
   default_numamemnode="0"
-  default_submit="time"
+  default_submit=""
 
   # Usage
   usage="\
@@ -325,6 +325,7 @@ Options:
     -k               Keep & use run directory as found, do not unpack inputs for
                      benchmark execution. Assume everything is already set up.
     --unpack         Unpack inputs for benchmark execution. Work with -k to only unpack inputs when necessary
+    --pid PATH       If specified, save the workload pid to this file.
     -m NETMODE       Execution mode for network workloads. 
                      NETMODE can be either 'server' or 'client'. 
     -t THREADS       The number of user threads talking to the upTCP/IP stack. Default: '1'
@@ -431,6 +432,7 @@ Examples (4) [NEW: Thread oversubscription experiments]:
   extcmd=""
   keep_rundir=""
   allow_unpack=""
+  pidpath=""
   while [ ! -z "$1" ]; do
     arg="$1"
     case "${arg}" in
@@ -564,6 +566,14 @@ Examples (4) [NEW: Thread oversubscription experiments]:
           exit 1
         fi
         allow_unpack="yes";;
+      "--pid" )
+        if [ ! -z "${need_arg_for}" ]; then
+          echo "${oprefix} Error: ${parsemode} expected between '${need_arg_for}' and '--pid'"
+          echo "${usage}"
+          exit 1
+        fi
+        need_arg_for="--pid"
+        parsemode="PIDPATH";;
       "-h" )
         echo "${usage}"
         exit 0;;
@@ -703,18 +713,21 @@ Examples (4) [NEW: Thread oversubscription experiments]:
             echo "NOTE: The external package ${extpkg} is running in background. Please check results later."
             echo ""
             exit 0;;
-         "NETMODE" )
+          "NETMODE" )
             parsemode="none"
             if [ ! ${arg} == "server" ] && [ ! ${arg} == "client" ]; then
-		echo "illegal value for NETMODE: NETMODE should be either 'server' or 'client'"
-		exit 1
-	    fi
+                echo "illegal value for NETMODE: NETMODE should be either 'server' or 'client'"
+                exit 1
+            fi
             netmode="${arg}";;
-         *        )
+          "PIDPATH" )
+            parsemode="none"
+            pidpath="${arg}";;
+          *        )
             echo "${oprefix} Error: Unknown argument '${arg}'"
             echo "${usage}"
             exit 1;;
-        esac;;
+    esac;;
     esac
 
     shift
@@ -1327,6 +1340,9 @@ function run_benchmark {
   echo "${oprefix} Running '${cmd}':" | ${TEE} ${log}
   if [ -z "${DRYRUN}" ]; then
     echo "${oprefix} [---------- Beginning of output ----------]" | ${TEE} ${log}
+    if [ ! -z ${pidpath} ]; then
+        cmd+=" & echo \"\$!\" > ${pidpath}"
+    fi
     (eval ${cmd} 2>&1) 2>&1 | ${TEE} ${bmrundir}/benchmark.out | ${TEE} ${log}
     echo "${oprefix} [----------    End of output    ----------]" | ${TEE} ${log}
   else
