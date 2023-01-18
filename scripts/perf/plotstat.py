@@ -8,7 +8,6 @@ import argparse
 import io
 from typing import List, Any, Iterable, ClassVar
 from pathlib import Path
-from IPython import embed
 from dataclasses import dataclass, field
 from itertools import cycle, groupby
 from functools import partial
