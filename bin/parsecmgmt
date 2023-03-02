@@ -1288,8 +1288,8 @@ function run_benchmark {
   # below is new code
   # make sure there will be no rundir when we need to create one
   if [[ ("${keep_rundir}" == "no") && (-d "${bmrundir}") ]]; then
-      echo "${oprefix} deleting old run directory." | ${tee} ${log}
-      ${rm} ${bmrundir} | ${tee} ${log}
+      echo "${oprefix} deleting old run directory." | ${TEE} ${log}
+      ${RM} ${bmrundir} | ${TEE} ${log}
   fi
   if [[ ("${keep_rundir}" == "yes") && (!(("${allow_unpack}" == "yes") && (! -d "${bmrundir}"))) ]]; then
     # if we want to keep the rundir and (there does not exist one or we are not allowed to create a new one)
@@ -1303,8 +1303,8 @@ function run_benchmark {
   else
     # Set up run directory
     if [ -d "${bmrundir}" ]; then
-      echo "${oprefix} deleting old run directory." | ${tee} ${log}
-      ${rm} ${bmrundir} | ${tee} ${log}
+      echo "${oprefix} deleting old run directory." | ${TEE} ${log}
+      ${RM} -rf ${bmrundir} | ${TEE} ${log}
     fi
 
     echo "${oprefix} Setting up run directory." | ${TEE} ${log}
@@ -1905,5 +1905,4 @@ case ${action} in
     echo "${oprefix} Error: Unknown action '${action}'."
     exit 1;;
 esac
-
 exit 0
