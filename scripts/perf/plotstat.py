@@ -212,17 +212,11 @@ def plot(args):
             traceData = pandas.read_table(io.StringIO(
                 preprocessData),
                 delim_whitespace=True, comment='#', names=colNames, converters={'counts': countsFilter})
-            # filter out invalid counters
-            # FIXME: allowing NA cells for testing purpose
-            # validTraceData = traceData.loc[~traceData['counts'].isna()]
             if args.verbose:
                 print(
                     f"The trace contains {traceData.size} entries in total, {validTraceData.size} valid entries")
-            # preprocess the trace data. Transform events as columns
-            validTraceData = traceData.groupby(['time', 'comm-pid']).apply(
-                lambda subdf:
-                pandas.Series(subdf['counts'].values, index=subdf['events'])
-            )
+            # the following pivot based solutions is provided by chatGPT
+            validTraceData = traceData.pivot(index=['time', 'comm-pid'], columns='events', values='counts')
             validTraceData.index.rename(['time', 'comm'])
             for ncore_plot in subplot_cols[ncores]:
                 if isinstance(ncore_plot, SubfigureDerivedMetric):
