@@ -11,7 +11,7 @@ import tempfile
 import os
 import time
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 import textwrap
 import json
 
@@ -223,41 +223,26 @@ def launchTest(args, package: str, ncores: int, oversub: int, trialID: int):
         parsecmgmt = subprocess.Popen(cmd, stdout=stdout)
         if args.profiler:
             profiler = PROFILER_NAMEMAP[args.profiler](args)
-            time.sleep(2)  # wait for the pidpath file to be ready
-            pidtext = pidfile.read()
-            pid = int(pidtext)
-            try:
-                os.kill(pid, 0)
-            except PermissionError:
-                print("Failed to find the parasec process {pid}")
-            profiler.blockingRun(package, ncores, oversub, pid)
-        """
-        if args.perfstat:
-            # FIXME: integrate the following when perf-stat with specific cpus
-            # assert args.numamem == 0, "Picking the right CPUID to track for other numa nodes has not been implemented"
-            time.sleep(2)  # wait for the pidpath file to be ready
-            pidtext = pidfile.read()
-            pid = int(pidtext)
-            try:
-                os.kill(pid, 0)
-            except PermissionError:
-                print("Failed to find the parasec process {pid}")
-            tids = getTIDofPID(pid)
-            if args.perftid_sample_ratio.endswith('%'):
-                nTIDSamples = int(
-                    int(args.perftid_sample_ratio[:-1]) / 100 * len(tids))
+            # spin until the pid file is ready
+            waitPIDFileReadTimeout = timedelta(seconds=10) + datetime.now()
+            pid = None
+            while datetime.now() < waitPIDFileReadTimeout:
+                try:
+                    pidtext = pidfile.read()
+                    pid = int(pidtext)
+                except:
+                    time.sleep(0.5)  # wait for the pidpath file to be ready
+                    continue
+                break
+            # check whether the pid is valid
+            if pid is None:
+                print("pidfile time out")
             else:
-                nTIDSamples = int(args.perftid_sample_ratio)
-            sampledTIDs = random.sample(tids, nTIDSamples) if len(
-                tids) > nTIDSamples else tids
-            sampledTIDs_str = ','.join([str(x) for x in sampledTIDs])
-            perfdataPath = f"{package}.C{ncores}.O{oversub}.{datetime.now().isoformat(timespec='seconds').replace(':','_')}.perf.data"
-            print(f"run perf on tids {sampledTIDs_str}")
-            subprocess.run(PERFCMD + shlex.split(
-                f"stat record -e cs,instructions,inst_retired.any -I100 --quiet --per-thread -o {perfdataPath} -t {sampledTIDs_str}"))
-            subprocess.run(shlex.split(
-                f"sudo /usr/bin/chown {os.getuid()}:{os.getgid()} {perfdataPath}"))
-        """
+                try:
+                    os.kill(pid, 0)
+                except PermissionError:
+                    print("Failed to find the parasec process {pid}")
+                profiler.blockingRun(package, ncores, oversub, pid)
         parsecmgmt.wait()
     pidfile.close()
 
