@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import shlex
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, Dict, Any
 import subprocess
 import csv
 import itertools
@@ -12,6 +12,8 @@ import os
 import time
 import random
 from datetime import datetime
+import textwrap
+import json
 
 
 def parseCherryPickedConf(conf: str) -> List[Tuple[int]]:
@@ -28,12 +30,118 @@ def parseIntCommaList(conf: str) -> List[int]:
     return list(map(int, conf.split(',')))
 
 
+class Profiler(object):
+    """
+    Anything that is supposed to run in parallel (a separate process) as the application.
+    E.g., perf
+    args is the one from argparser, cmdline args
+    """
+    name: str = None
+
+    def __init__(self, args):
+        self.args = args
+        self.profiler_args = self.getDefaultArgs()
+        self.profiler_args.update(args.profiler_args)
+
+    def getHelp(self) -> str:
+        """Eventually passed to the argparse help"""
+        raise NotImplementedError("Profiler Base Class")
+
+    def getDefaultArgs(self) -> Dict[str, Any]:
+        """The default configurations of this profiler"""
+        raise NotImplementedError("Profiler Base Class")
+
+    def blockingRun(self, package: str, ncores: int, oversub: int, pid: int) -> None:
+        """Invoke this profiler with user-provided args. Only return when the profiler process exits."""
+        raise NotImplementedError("Profiler Base Class")
+
+
+class PerfStatProfiler(Profiler):
+    name: str = "perfstat"
+
+    def __init__(self, args):
+        super().__init__(args)
+
+    @classmethod
+    def getHelp(cls) -> str:
+        return textwrap.dedent('''\
+            Run perf stat to collect simple counters.
+            Args:
+            - sample-ratio: Determine how should perf-stat sample threads. Ending with `%%` means a ratio of the total number of threads. Otherwise means to sample a fix number of threads.")
+            Default:\
+        ''') + \
+            json.dumps(cls.getDefaultArgs(), indent=2)
+
+    @classmethod
+    def getDefaultArgs(cls) -> Dict[str, Any]:
+        return {
+            'sample-ratio': '10%'
+        }
+
+    def blockingRun(self, package: str, ncores: int, oversub: int, pid: int) -> None:
+        tids = getTIDofPID(pid)
+        if self.profiler_args['sample-ratio'].endswith('%'):
+            nTIDSamples = int(
+                int(self.profiler_args['sample-ratio'][:-1]) / 100 * len(tids))
+        else:
+            nTIDSamples = int(args.perftid_sample_ratio)
+        sampledTIDs = random.sample(tids, nTIDSamples) if len(
+            tids) > nTIDSamples else tids
+        sampledTIDs_str = ','.join([str(x) for x in sampledTIDs])
+        perfdataPath = f"{package}.C{ncores}.O{oversub}.{datetime.now().isoformat(timespec='seconds').replace(':','_')}.perf.data"
+        print(f"run perf on tids {sampledTIDs_str}")
+        subprocess.run(PERFCMD + shlex.split(
+            f"stat record -e cs,instructions,inst_retired.any -I100 --quiet --per-thread -o {perfdataPath} -t {sampledTIDs_str}"))
+        subprocess.run(shlex.split(
+            f"sudo /usr/bin/chown {os.getuid()}:{os.getgid()} {perfdataPath}"))
+
+class PerfSchedProfiler(Profiler):
+    name: str = "perfsched"
+
+    def __init__(self, args):
+        super().__init__(args)
+
+    @classmethod
+    def getHelp(cls) -> str:
+        return textwrap.dedent('''\
+            Run perf record to collect sched related events.
+            Args:
+            - events: list of string. same as the `-e` option
+            Default:\
+            ''') + \
+                json.dumps(cls.getDefaultArgs(), indent=2)
+
+    @classmethod
+    def getDefaultArgs(cls) -> Dict[str, Any]:
+        return {
+            'events': ['sched:sched_switch']
+        }
+
+    def blockingRun(self, package: str, ncores: int, oversub: int, pid: int) -> None:
+        eventOpts = ' '.join([f"-e {event}" for event in self.profiler_args['events']])
+        perfdataPath = f"{package}.C{ncores}.O{oversub}.{datetime.now().isoformat(timespec='seconds').replace(':','_')}.perf.data"
+        subprocess.run(PERFCMD + shlex.split(
+            f"record {eventOpts} -p {pid} -o {perfdataPath}"
+        ))
+        subprocess.run(shlex.split(
+            f"sudo /usr/bin/chown {os.getuid()}:{os.getgid()} {perfdataPath}"))
+
+
+ALL_PROFILER = [PerfStatProfiler, PerfSchedProfiler]
+PROFILER_NAMEMAP = {p.name: p for p in ALL_PROFILER}
+
+
 def buildParser():
     """
     return: args
     """
+    epilog = "Available Profilers and their description:\n"
+    for p in ALL_PROFILER:
+        epilog += f"#### {p.name}\n{p.getHelp()}\n"
     parser = argparse.ArgumentParser(
-        description="Perform sweep experiment over thread oversubscription")
+        description="Perform sweep experiment over thread oversubscription",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog = epilog)
     parser.add_argument('--packages', '-p', type=str, required=True,
                         help="A comma separated list of packages to run")
     parser.add_argument('--cores', '-C', type=parseIntCommaList, default=[],
@@ -60,10 +168,12 @@ def buildParser():
                         help="Verbose, print command exec output")
     parser.add_argument('--openargs', '-O', type=str, default="a",
                         help="the open arguments for the output csv (default: %(default)s)")
-    # TODO: make perf-stat configurations configurable
-    parser.add_argument('--perfstat', action="store_true",
-                        help="Enable perf-stat")
-    parser.add_argument('--perftid-sample-ratio', type=str, default="10%", help="Determine how should perf-stat sample threads. Ending with `%%` means a ratio of the total number of threads. Otherwise means to sample a fix number of threads (default: %(default)s)")
+    parser.add_argument('--profiler', choices=PROFILER_NAMEMAP.keys(), help="Pick a profiler (see later for a full list of available profiler and their description)")
+    parser.add_argument('--profiler-args', type=lambda s: json.loads(s), default=dict(), help="Config the profiler with additional args. In json format.")
+    #parser.add_argument('--perfstat', action="store_true",
+    #                    help="Enable perf-stat")
+    #parser.add_argument('--perftid-sample-ratio', type=str, default="10%",
+    #                    help="Determine how should perf-stat sample threads. Ending with `%%` means a ratio of the total number of threads. Otherwise means to sample a fix number of threads (default: %(default)s)")
     return parser.parse_args()
 
 
@@ -97,7 +207,7 @@ def launchTest(args, package: str, ncores: int, oversub: int, trialID: int):
         "-d", args.rundir, "--numamem", f"{args.numamem}",
         "--pid", pidfile.name,
     ]
-    if not args.perfstat:
+    if args.profiler is None:
         # timer related prefix will break the pidpath functionality (the timing measurement process will override the actual app process)
         non_timer_prefix = [f'{ncores}',
                             f'{ncores * oversub}', f'{trialID}']
@@ -111,6 +221,17 @@ def launchTest(args, package: str, ncores: int, oversub: int, trialID: int):
     stdout = None if args.verbose else subprocess.DEVNULL
     if not args.dryrun:
         parsecmgmt = subprocess.Popen(cmd, stdout=stdout)
+        if args.profiler:
+            profiler = PROFILER_NAMEMAP[args.profiler](args)
+            time.sleep(2)  # wait for the pidpath file to be ready
+            pidtext = pidfile.read()
+            pid = int(pidtext)
+            try:
+                os.kill(pid, 0)
+            except PermissionError:
+                print("Failed to find the parasec process {pid}")
+            profiler.blockingRun(package, ncores, oversub, pid)
+        """
         if args.perfstat:
             # FIXME: integrate the following when perf-stat with specific cpus
             # assert args.numamem == 0, "Picking the right CPUID to track for other numa nodes has not been implemented"
@@ -119,21 +240,24 @@ def launchTest(args, package: str, ncores: int, oversub: int, trialID: int):
             pid = int(pidtext)
             try:
                 os.kill(pid, 0)
-                tids = getTIDofPID(pid)
-                if args.perftid_sample_ratio.endswith('%'):
-                    nTIDSamples = int(int(args.perftid_sample_ratio[:-1]) / 100 * len(tids))
-                else:
-                    nTIDSamples = int(args.perftid_sample_ratio)
-                sampledTIDs = random.sample(tids, nTIDSamples) if len(
-                    tids) > nTIDSamples else tids
-                sampledTIDs_str = ','.join([str(x) for x in sampledTIDs])
-                perfdataPath = f"{package}.C{ncores}.O{oversub}.{datetime.now().isoformat(timespec='seconds').replace(':','_')}.perf.data"
-                print(f"run perf on tids {sampledTIDs_str}")
-                subprocess.run(PERFCMD + shlex.split(
-                    f"stat record -e cs,instructions,inst_retired.any -I100 --quiet --per-thread -o {perfdataPath} -t {sampledTIDs_str}"))
-                subprocess.run(shlex.split(f"sudo /usr/bin/chown {os.getuid()}:{os.getgid()} {perfdataPath}"))
             except PermissionError:
                 print("Failed to find the parasec process {pid}")
+            tids = getTIDofPID(pid)
+            if args.perftid_sample_ratio.endswith('%'):
+                nTIDSamples = int(
+                    int(args.perftid_sample_ratio[:-1]) / 100 * len(tids))
+            else:
+                nTIDSamples = int(args.perftid_sample_ratio)
+            sampledTIDs = random.sample(tids, nTIDSamples) if len(
+                tids) > nTIDSamples else tids
+            sampledTIDs_str = ','.join([str(x) for x in sampledTIDs])
+            perfdataPath = f"{package}.C{ncores}.O{oversub}.{datetime.now().isoformat(timespec='seconds').replace(':','_')}.perf.data"
+            print(f"run perf on tids {sampledTIDs_str}")
+            subprocess.run(PERFCMD + shlex.split(
+                f"stat record -e cs,instructions,inst_retired.any -I100 --quiet --per-thread -o {perfdataPath} -t {sampledTIDs_str}"))
+            subprocess.run(shlex.split(
+                f"sudo /usr/bin/chown {os.getuid()}:{os.getgid()} {perfdataPath}"))
+        """
         parsecmgmt.wait()
     pidfile.close()
 
@@ -150,7 +274,7 @@ def sweep(args, csvWriter, rowCallback: Callable[[], None]):
         for (ncores, oversub) in allConfs:
             for trialID in range(args.ntrials):
                 launchTest(args, p, ncores, oversub, trialID)
-                if not args.dryrun and not args.perfstat:
+                if not args.dryrun and args.profiler is None:
                     with open(args.time_temp, "r") as f:
                         record_dict = {}
                         time_records = f.read().strip().split(',')
