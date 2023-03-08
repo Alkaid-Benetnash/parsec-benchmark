@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
 import argparse
-import shlex
-from typing import List, Tuple, Callable, Dict, Any
-import subprocess
+from typing import List, Tuple, Callable, Optional
 import csv
 import itertools
 from pathlib import Path
-from csvFields import RAWDATACSVFIELDS, ALLGNUTIMEFIELDS, ALLCSVFIELDS, DeductiveFields
-import tempfile
+from csvFields import RAWDATACSVFIELDS, ALLCSVFIELDS, DeductiveFields
 import os
-import time
-import random
-from datetime import datetime, timedelta
-import textwrap
 import json
+from profiler import ALL_PROFILER, PROFILER_NAMEMAP
+from parsecRun import ParsecRun
+from threadedcg import ThreadedCG
 
 
 def parseCherryPickedConf(conf: str) -> List[Tuple[int]]:
@@ -28,107 +24,6 @@ def parseCherryPickedConf(conf: str) -> List[Tuple[int]]:
 
 def parseIntCommaList(conf: str) -> List[int]:
     return list(map(int, conf.split(',')))
-
-
-class Profiler(object):
-    """
-    Anything that is supposed to run in parallel (a separate process) as the application.
-    E.g., perf
-    args is the one from argparser, cmdline args
-    """
-    name: str = None
-
-    def __init__(self, args):
-        self.args = args
-        self.profiler_args = self.getDefaultArgs()
-        self.profiler_args.update(args.profiler_args)
-
-    def getHelp(self) -> str:
-        """Eventually passed to the argparse help"""
-        raise NotImplementedError("Profiler Base Class")
-
-    def getDefaultArgs(self) -> Dict[str, Any]:
-        """The default configurations of this profiler"""
-        raise NotImplementedError("Profiler Base Class")
-
-    def blockingRun(self, package: str, ncores: int, oversub: int, pid: int) -> None:
-        """Invoke this profiler with user-provided args. Only return when the profiler process exits."""
-        raise NotImplementedError("Profiler Base Class")
-
-
-class PerfStatProfiler(Profiler):
-    name: str = "perfstat"
-
-    def __init__(self, args):
-        super().__init__(args)
-
-    @classmethod
-    def getHelp(cls) -> str:
-        return textwrap.dedent('''\
-            Run perf stat to collect simple counters.
-            Args:
-            - sample-ratio: Determine how should perf-stat sample threads. Ending with `%%` means a ratio of the total number of threads. Otherwise means to sample a fix number of threads.")
-            Default:\
-        ''') + \
-            json.dumps(cls.getDefaultArgs(), indent=2)
-
-    @classmethod
-    def getDefaultArgs(cls) -> Dict[str, Any]:
-        return {
-            'sample-ratio': '10%'
-        }
-
-    def blockingRun(self, package: str, ncores: int, oversub: int, pid: int) -> None:
-        tids = getTIDofPID(pid)
-        if self.profiler_args['sample-ratio'].endswith('%'):
-            nTIDSamples = int(
-                int(self.profiler_args['sample-ratio'][:-1]) / 100 * len(tids))
-        else:
-            nTIDSamples = int(args.perftid_sample_ratio)
-        sampledTIDs = random.sample(tids, nTIDSamples) if len(
-            tids) > nTIDSamples else tids
-        sampledTIDs_str = ','.join([str(x) for x in sampledTIDs])
-        perfdataPath = f"{package}.C{ncores}.O{oversub}.{datetime.now().isoformat(timespec='seconds').replace(':','_')}.perf.data"
-        print(f"run perf on tids {sampledTIDs_str}")
-        subprocess.run(PERFCMD + shlex.split(
-            f"stat record -e cs,instructions,inst_retired.any -I100 --quiet --per-thread -o {perfdataPath} -t {sampledTIDs_str}"))
-        subprocess.run(shlex.split(
-            f"sudo /usr/bin/chown {os.getuid()}:{os.getgid()} {perfdataPath}"))
-
-class PerfSchedProfiler(Profiler):
-    name: str = "perfsched"
-
-    def __init__(self, args):
-        super().__init__(args)
-
-    @classmethod
-    def getHelp(cls) -> str:
-        return textwrap.dedent('''\
-            Run perf record to collect sched related events.
-            Args:
-            - events: list of string. same as the `-e` option
-            Default:\
-            ''') + \
-                json.dumps(cls.getDefaultArgs(), indent=2)
-
-    @classmethod
-    def getDefaultArgs(cls) -> Dict[str, Any]:
-        return {
-            'events': ['sched:sched_switch']
-        }
-
-    def blockingRun(self, package: str, ncores: int, oversub: int, pid: int) -> None:
-        eventOpts = ' '.join([f"-e {event}" for event in self.profiler_args['events']])
-        perfdataPath = f"{package}.C{ncores}.O{oversub}.{datetime.now().isoformat(timespec='seconds').replace(':','_')}.perf.data"
-        subprocess.run(PERFCMD + shlex.split(
-            f"record {eventOpts} -p {pid} -o {perfdataPath}"
-        ))
-        subprocess.run(shlex.split(
-            f"sudo /usr/bin/chown {os.getuid()}:{os.getgid()} {perfdataPath}"))
-
-
-ALL_PROFILER = [PerfStatProfiler, PerfSchedProfiler]
-PROFILER_NAMEMAP = {p.name: p for p in ALL_PROFILER}
 
 
 def buildParser():
@@ -170,26 +65,12 @@ def buildParser():
                         help="the open arguments for the output csv (default: %(default)s)")
     parser.add_argument('--profiler', choices=PROFILER_NAMEMAP.keys(), help="Pick a profiler (see later for a full list of available profiler and their description)")
     parser.add_argument('--profiler-args', type=lambda s: json.loads(s), default=dict(), help="Config the profiler with additional args. In json format.")
-    #parser.add_argument('--perfstat', action="store_true",
-    #                    help="Enable perf-stat")
-    #parser.add_argument('--perftid-sample-ratio', type=str, default="10%",
-    #                    help="Determine how should perf-stat sample threads. Ending with `%%` means a ratio of the total number of threads. Otherwise means to sample a fix number of threads (default: %(default)s)")
+    parser.add_argument('--threadedcg', action="store_true", help="Setup the threaded cgroupv2 for scheduling experiments")
+    parser.add_argument('--threadedcg-path', type=str, default="threaded.test.cg", help="The name of the cgroup name to test thread scheduling (default: %(default)s)")
+    parser.add_argument('--threadedcg-core-num', type=int, default=2, help="How many cpu cores to be grouped together?")
     return parser.parse_args()
 
-
-PERFCMD = ['sudo', '/usr/bin/perf']
-
-
-def getTIDofPID(pid: int) -> List[int]:
-    """
-    return a list of thread ID for a given process ID
-    """
-    ps = subprocess.run(shlex.split(
-        f"ps -L -o tid --no-headers {pid}"), capture_output=True, text=True)
-    return [int(tid) for tid in ps.stdout.splitlines()]
-
-
-def launchTest(args, package: str, ncores: int, oversub: int, trialID: int):
+def launchTest(args, package: str, ncores: int, oversub: int, trialID: int, threadedCG: Optional[ThreadedCG] = None):
     """
     @param package the name of the parsec package you want to run
     @param ncores how many logical CPU cores should be allocated
@@ -200,51 +81,25 @@ def launchTest(args, package: str, ncores: int, oversub: int, trialID: int):
     2. PERFCMD can be called without user interaction (e.g., no sudo prompt)
        sample sudoers: "${USER} ALL=(root:root) NOPASSWD:/usr/bin/perf, NOPASSWD:/usr/bin/chown"
     """
-    pidfile = tempfile.NamedTemporaryFile(mode="w+")
-    cmd = [
-        "parsecmgmt", "-a", "run", "-p", package, "-i", "native",
-        "-n", f"{oversub}x", "-C", f"{ncores}",
-        "-d", args.rundir, "--numamem", f"{args.numamem}",
-        "--pid", pidfile.name,
-    ]
+    parsec = ParsecRun(args, package, ncores, oversub, trialID)
     if args.profiler is None:
         # timer related prefix will break the pidpath functionality (the timing measurement process will override the actual app process)
-        non_timer_prefix = [f'{ncores}',
-                            f'{ncores * oversub}', f'{trialID}']
-        timer_fmt_str = ','.join(
-            non_timer_prefix + [f'%{f.timeFMT}' for f in ALLGNUTIMEFIELDS])
-        timer_cmd = f"/usr/bin/time -o {args.time_temp} -f {timer_fmt_str}"
-        cmd += ["-s", timer_cmd]
-    if args.keepdir:
-        cmd += ["-k", "--unpack"]
-    print(f"Executing {shlex.join(cmd)}")
-    stdout = None if args.verbose else subprocess.DEVNULL
+        parsec.setTimeAsPrefix()
     if not args.dryrun:
-        parsecmgmt = subprocess.Popen(cmd, stdout=stdout)
+        parsec.runDetached()
+        if args.threadedcg:
+            assert(threadedCG is not None)
+            pid = parsec.getPid()
+            threadedCG.trackPID(pid)
+            parsec.waitUntilTIDStabilized()
+            threadedCG.randTIDCluster()
         if args.profiler:
-            profiler = PROFILER_NAMEMAP[args.profiler](args)
-            # spin until the pid file is ready
-            waitPIDFileReadTimeout = timedelta(seconds=10) + datetime.now()
-            pid = None
-            while datetime.now() < waitPIDFileReadTimeout:
-                try:
-                    pidtext = pidfile.read()
-                    pid = int(pidtext)
-                except:
-                    time.sleep(0.5)  # wait for the pidpath file to be ready
-                    continue
-                break
-            # check whether the pid is valid
-            if pid is None:
-                print("pidfile time out")
-            else:
-                try:
-                    os.kill(pid, 0)
-                except PermissionError:
-                    print("Failed to find the parasec process {pid}")
-                profiler.blockingRun(package, ncores, oversub, pid)
-        parsecmgmt.wait()
-    pidfile.close()
+            profiler = PROFILER_NAMEMAP[args.profiler](args, parsec)
+            pid = parsec.getPid()
+            profiler.blockingRun()
+        parsec.waitUntilComplete()
+    else:
+        print(f"Dryrun, cmd: {parsec.cmd}")
 
 
 def sweep(args, csvWriter, rowCallback: Callable[[], None]):
@@ -253,12 +108,20 @@ def sweep(args, csvWriter, rowCallback: Callable[[], None]):
     """
     packages = args.packages.split(',')
     allConfs = args.cherrypick
+    # TODO: consider adding threadedcg_core_num to this allConfs product, then I can collect csv automatically and compare against different setups
     if args.cores is not None and args.oversub is not None:
         allConfs += list(itertools.product(args.cores, args.oversub))
     for p in packages:
         for (ncores, oversub) in allConfs:
             for trialID in range(args.ntrials):
-                launchTest(args, p, ncores, oversub, trialID)
+                threadedCG = None
+                if args.threadedcg:
+                    threadedCG = ThreadedCG(args.threadedcg_path, args.threadedcg_core_num, ncores, args.numamem)
+                try:
+                    launchTest(args, p, ncores, oversub, trialID, threadedCG)
+                except Exception as e:
+                    print(f"WARNING: experiment {p} with C{ncores}.O{oversub} at trial.{trialID} failed with exception: {e}")
+                    continue
                 if not args.dryrun and args.profiler is None:
                     with open(args.time_temp, "r") as f:
                         record_dict = {}
