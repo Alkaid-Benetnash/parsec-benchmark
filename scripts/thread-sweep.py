@@ -96,8 +96,10 @@ def launchTest(args, package: str, ncores: int, oversub: int, trialID: int, thre
         if args.profiler:
             profiler = PROFILER_NAMEMAP[args.profiler](args, parsec)
             pid = parsec.getPid()
-            profiler.blockingRun()
+            profiler.run()
         parsec.waitUntilComplete()
+        if args.profiler:
+            profiler.callback()
     else:
         print(f"Dryrun, cmd: {parsec.cmd}")
 

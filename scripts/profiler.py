@@ -10,6 +10,7 @@ from parsecRun import ParsecRun
 
 PERFCMD = ['sudo', '/usr/bin/perf']
 
+
 class Profiler(object):
     """
     Anything that is supposed to run in parallel (a separate process) as the application.
@@ -32,9 +33,15 @@ class Profiler(object):
         """The default configurations of this profiler"""
         raise NotImplementedError("Profiler Base Class")
 
-    def blockingRun(self, package: str, ncores: int, oversub: int, pid: int) -> None:
+    def run(self, package: str, ncores: int, oversub: int, pid: int) -> None:
         """Invoke this profiler with user-provided args. Only return when the profiler process exits."""
         raise NotImplementedError("Profiler Base Class")
+
+    def callback(self) -> None:
+        """
+        A callback function that will be invoked after the main parsec command finishes
+        """
+        return None
 
 
 class PerfStatProfiler(Profiler):
@@ -59,7 +66,7 @@ class PerfStatProfiler(Profiler):
             'sample-ratio': '10%'
         }
 
-    def blockingRun(self) -> None:
+    def run(self) -> None:
         tids = getTIDofPID(self.parsec.getPid())
         if self.profiler_args['sample-ratio'].endswith('%'):
             nTIDSamples = int(
@@ -98,7 +105,7 @@ class PerfSchedProfiler(Profiler):
             'events': ['sched:sched_switch']
         }
 
-    def blockingRun(self) -> None:
+    def run(self) -> None:
         # NOTE that perf will NOT follow newly created threads once launched
         # So this perfsched needs to wait for TID to become stable
         self.parsec.waitUntilTIDStabilized()
@@ -111,5 +118,35 @@ class PerfSchedProfiler(Profiler):
         sudochown(perfdataPath)
 
 
-ALL_PROFILER = [PerfStatProfiler, PerfSchedProfiler]
+class PerfDebuggingProfiler(Profiler):
+    name: str = "dbg"
+
+    def __init__(self, args, parsec: ParsecRun):
+        super().__init__(args, parsec)
+
+    @classmethod
+    def getHelp(cls) -> str:
+        return textwrap.dedent('''\
+            For debugging or manual process only. This profiler will dump useful information to the stdout.
+            Args: None
+            ''')
+
+    @classmethod
+    def getDefaultArgs(cls) -> Dict[str, Any]:
+        return {}
+
+    def run(self) -> None:
+        self.starttime = datetime.now()
+        print(f"DBG: pid is {self.parsec.getPid()}")
+        self.parsec.waitUntilTIDStabilized()
+        print(
+            f"DBG: pid {self.parsec.getPid()} is now considered to have stable TID")
+
+    def callback(self):
+        print(
+            f"DBG: pid completed. elapsed time {(datetime.now() - self.starttime).total_seconds()}")
+        return None
+
+
+ALL_PROFILER = [PerfStatProfiler, PerfSchedProfiler, PerfDebuggingProfiler]
 PROFILER_NAMEMAP = {p.name: p for p in ALL_PROFILER}
