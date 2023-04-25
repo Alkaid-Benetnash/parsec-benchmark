@@ -94,7 +94,7 @@ class PerfSchedProfiler(Profiler):
         return textwrap.dedent('''\
             Run perf record to collect sched related events.
             Args:
-            - events: list of string. same as the `-e` option
+            - events: list of string. same as the `-e` option. Will fallback to `sched record` if this is left empty
             Default:\
             ''') + \
             json.dumps(cls.getDefaultArgs(), indent=2)
@@ -109,12 +109,14 @@ class PerfSchedProfiler(Profiler):
         # NOTE that perf will NOT follow newly created threads once launched
         # So this perfsched needs to wait for TID to become stable
         self.parsec.waitUntilTIDStabilized()
-        eventOpts = ' '.join(
-            [f"-e {event}" for event in self.profiler_args['events']])
         perfdataPath = f"{self.parsec.getIdentifier()}.perf.data"
-        subprocess.run(PERFCMD + shlex.split(
-            f"record {eventOpts} -p {self.parsec.getPid()} -o {perfdataPath}"
-        ))
+        if len(self.profiler_args['events']) > 0:
+            eventOpts = ' '.join(
+                [f"-e {event}" for event in self.profiler_args['events']])
+            cmdargs = f"record {eventOpts} -p {self.parsec.getPid()} -o {perfdataPath}"
+        else:
+            cmdargs = f"sched record -p {self.parsec.getPid()} -o {perfdataPath}"
+        subprocess.run(PERFCMD + shlex.split(cmdargs))
         sudochown(perfdataPath)
 
 
