@@ -69,7 +69,7 @@ class PerfStatProfiler(Profiler):
         sampledTIDs = random.sample(tids, nTIDSamples) if len(
             tids) > nTIDSamples else tids
         sampledTIDs_str = ','.join([str(x) for x in sampledTIDs])
-        perfdataPath = f"{self.parsec.package}.C{self.parsec.ncores}.O{self.parsec.oversub}.{datetime.now().isoformat(timespec='seconds').replace(':','_')}.perf.data"
+        perfdataPath = f"{self.parsec.getIdentifier()}.perf.data"
         print(f"run perf on tids {sampledTIDs_str}")
         subprocess.run(PERFCMD + shlex.split(
             f"stat record -e cs,instructions,inst_retired.any -I100 --quiet --per-thread -o {perfdataPath} -t {sampledTIDs_str}"))
@@ -104,7 +104,7 @@ class PerfSchedProfiler(Profiler):
         self.parsec.waitUntilTIDStabilized()
         eventOpts = ' '.join(
             [f"-e {event}" for event in self.profiler_args['events']])
-        perfdataPath = f"{self.parsec.package}.C{self.parsec.ncores}.O{self.parsec.oversub}.{datetime.now().isoformat(timespec='seconds').replace(':','_')}.perf.data"
+        perfdataPath = f"{self.parsec.getIdentifier()}.perf.data"
         subprocess.run(PERFCMD + shlex.split(
             f"record {eventOpts} -p {self.parsec.getPid()} -o {perfdataPath}"
         ))

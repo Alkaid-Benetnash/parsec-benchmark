@@ -102,3 +102,9 @@ class ParsecRun(object):
                 time.sleep(pollIntervalSec)
         print(f"Consider {nTh} threads in {self.package} to be stable")
         self.tidStabilized = True
+
+    def getIdentifier(self, timestamped=True) -> str:
+        """
+        Generate a timestamped (optional) identifier that encodes the name, config, etc. of the current parsec run.
+        """
+        return f"{self.package}.C{self.ncores}.O{self.oversub}.{datetime.now().isoformat(timespec='seconds').replace(':','_')}"
