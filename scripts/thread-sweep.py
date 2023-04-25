@@ -4,9 +4,12 @@ from typing import List, Tuple, Callable, Optional
 import csv
 import itertools
 from pathlib import Path
-from csvFields import RAWDATACSVFIELDS, ALLCSVFIELDS, DeductiveFields
 import os
 import json
+import subprocess
+import shlex
+
+from csvFields import RAWDATACSVFIELDS, ALLCSVFIELDS, DeductiveFields
 from profiler import ALL_PROFILER, PROFILER_NAMEMAP
 from parsecRun import ParsecRun
 from threadedcg import ThreadedCG
@@ -49,7 +52,7 @@ def buildParser():
                         help="Dump the commands to run without running the benchmark")
     parser.add_argument('--numamem', '-m', type=int, default=0,
                         help="The numa node to allocate memory from. Passed to parsecmgmt (default: %(default)s)")
-    parser.add_argument('--rundir', '-d', type=str, default="/dev/shm/parsec_sweep",
+    parser.add_argument('--rundir', '-d', type=str, default="/tmp/parsec_sweep",
                         help="The root directory to run the benchmark. This is passed to `parsecmgmt` (default: %(default)s)")
     parser.add_argument('--time-temp', type=str, default="/tmp/time.temp",
                         help="A temporary file that stores intermediate results reported by the /usr/bin/time (default: %(default)s)")
@@ -135,10 +138,27 @@ def sweep(args, csvWriter, rowCallback: Callable[[], None]):
                         csvWriter.writerow(record_dict)
                         rowCallback()
 
+def sanityCheckArgs(args):
+    # Allow creating a new rundir
+    Path(args.rundir).mkdir(exist_ok=True)
+    # expect the rundir to be a tmpfs
+    assert os.path.ismount(args.rundir), f"The rundir {args.rundir} is not a mount point. We expect that to be a tmpfs"
+    # args.rundir is indeed a mountpoint, then let us check its mount parameters
+    findmntRaw = subprocess.run(shlex.split(f"findmnt -J {args.rundir}"), capture_output=True, text=True)
+    findmnt = json.loads(findmntRaw.stdout)
+    rundir_mnt = findmnt["filesystems"][0]
+    assert rundir_mnt["fstype"] == "tmpfs", f"The rundir {args.rundir} is expected to be a tmpfs mount"
+    options = rundir_mnt["options"].split(',')
+    for op in options:
+        if '=' in op:
+            k, v = op.split('=')
+            if k == "mpol" and v != f"bind:{args.numamem}":
+                raise RuntimeError(f"tmpfs with option {op} conflicts with the numamem {args.numamem}")
 
 if __name__ == "__main__":
     args = buildParser()
-    Path(args.rundir).mkdir(exist_ok=True)
+    sanityCheckArgs(args)
+    # TODO: only print CSV header when the csv file does not exist
     with open(args.output, args.openargs) as csvfile:
         csvWriter = csv.DictWriter(
             csvfile, fieldnames=[f.key for f in ALLCSVFIELDS])
