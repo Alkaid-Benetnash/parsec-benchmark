@@ -50,10 +50,12 @@ CSVNTHREADS = CSVField(key="nthreads",
                        description="The number of threads requested for this workload.")
 CSVNTRIAL = CSVField(key="ntrial",
                      description="The identifier to distinguish repeated runs of one configuration.")
-
+CSVCGCFG = CSVField(key="cgcfg",
+                    description="threadedcg CGroup configuration. 0 means no cg. other positive integer means the number of cpus in the same cgroup.")
 RAWDATACSVFIELDS = [
     CSVNCORES,
     CSVNTHREADS,
+    CSVCGCFG,
     CSVNTRIAL,
     *ALLGNUTIMEFIELDS,
 ]
@@ -95,7 +97,7 @@ class DeductiveCurTimeStamp(DeductiveField):
 
     @classmethod
     def callback(cls, row):
-        if row[cls.key] is None:
+        if cls.key not in row:
             row[cls.key] = datetime.now().isoformat(timespec='seconds')
 
 
@@ -107,7 +109,7 @@ class DeductiveCPUTime(DeductiveField):
 
     @classmethod
     def callback(cls, row):
-        if row[cls.key] is None:
+        if cls.key not in row:
             row[cls.key] = float(row["usertime"]) + float(row["systime"])
 
 

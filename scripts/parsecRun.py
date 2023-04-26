@@ -9,7 +9,7 @@ import subprocess
 import os
 from datetime import datetime, timedelta
 import time
-from utils import getTIDofPID
+from utils import getTIDofPID, getNowTSEscaped
 
 
 class ParsecRun(object):
@@ -36,7 +36,7 @@ class ParsecRun(object):
 
     def setTimeAsPrefix(self):
         non_timer_prefix = [f'{self.ncores}',
-                            f'{self.ncores * self.oversub}', f'{self.trialID}']
+                            f'{self.ncores * self.oversub}', f'{self.getCGCFG()}', f'{self.trialID}']
         timer_fmt_str = ','.join(
             non_timer_prefix + [f'%{f.timeFMT}' for f in ALLGNUTIMEFIELDS])
         timer_cmd = f"/usr/bin/time -o {self.args.time_temp} -f {timer_fmt_str}"
@@ -103,8 +103,15 @@ class ParsecRun(object):
         print(f"Consider {nTh} threads in {self.package} to be stable")
         self.tidStabilized = True
 
+    def getCGCFG(self) -> int:
+        return self.args.threadedcg_core_num if self.args.threadedcg else 0
+
     def getIdentifier(self, timestamped=True) -> str:
         """
         Generate a timestamped (optional) identifier that encodes the name, config, etc. of the current parsec run.
         """
-        return f"{self.package}.C{self.ncores}.O{self.oversub}.{datetime.now().isoformat(timespec='seconds').replace(':','_')}"
+        plain_identifier = f"{self.package}.C{self.ncores}.O{self.oversub}.CG{self.getCGCFG()}"
+        if timestamped:
+            return f"{plain_identifier}.{getNowTSEscaped()}"
+        else:
+            return plain_identifier

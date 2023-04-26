@@ -4,6 +4,7 @@ import shlex
 from functools import cache
 from pathlib import Path
 import os
+from datetime import datetime
 
 
 def getTIDofPID(pid: int) -> List[int]:
@@ -92,3 +93,6 @@ def sudotee(path: str | Path, input: str, output=subprocess.DEVNULL):
     _, errs = tee.communicate(input=input)
     if len(errs) > 0:
         print(f"sudotee, stderr: {errs}")
+
+def getNowTSEscaped() -> str:
+    return f"{datetime.now().isoformat(timespec='seconds').replace(':','_')}"

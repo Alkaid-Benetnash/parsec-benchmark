@@ -70,7 +70,7 @@ def buildParser():
     parser.add_argument('--profiler-args', type=lambda s: json.loads(s), default=dict(), help="Config the profiler with additional args. In json format.")
     parser.add_argument('--threadedcg', action="store_true", help="Setup the threaded cgroupv2 for scheduling experiments")
     parser.add_argument('--threadedcg-path', type=str, default="threaded.test.cg", help="The name of the cgroup name to test thread scheduling (default: %(default)s)")
-    parser.add_argument('--threadedcg-core-num', type=int, default=2, help="How many cpu cores to be grouped together?")
+    parser.add_argument('--threadedcg-core-num', type=int, default=2, help="How many cpu cores to be grouped together? (default: %(default)s)")
     return parser.parse_args()
 
 def launchTest(args, package: str, ncores: int, oversub: int, trialID: int, threadedCG: Optional[ThreadedCG] = None):
