@@ -47,7 +47,7 @@ def buildParser():
     parser.add_argument('--oversub', '-S', type=parseIntCommaList, default=[],
                         help="A comma separated list of thread oversubscription ratio to test")
     parser.add_argument('--cherrypick', type=parseCherryPickedConf, default=[],
-                        help="A comma separated list of specific (ncore oversub) pairs of configurations. e.g., (1 4),(2 8)")
+                        help="A comma separated list of specific (ncore oversub cgcfg) pairs of configurations. e.g., (1 4 0),(2 8 0)")
     parser.add_argument('--dryrun', action="store_true",
                         help="Dump the commands to run without running the benchmark")
     parser.add_argument('--numamem', '-m', type=int, default=0,
@@ -68,12 +68,12 @@ def buildParser():
                         help="the open arguments for the output csv (default: %(default)s)")
     parser.add_argument('--profiler', choices=PROFILER_NAMEMAP.keys(), help="Pick a profiler (see later for a full list of available profiler and their description)")
     parser.add_argument('--profiler-args', type=lambda s: json.loads(s), default=dict(), help="Config the profiler with additional args. In json format.")
-    parser.add_argument('--threadedcg', action="store_true", help="Setup the threaded cgroupv2 for scheduling experiments")
     parser.add_argument('--threadedcg-path', type=str, default="threaded.test.cg", help="The name of the cgroup name to test thread scheduling (default: %(default)s)")
-    parser.add_argument('--threadedcg-core-num', type=int, default=2, help="How many cpu cores to be grouped together? (default: %(default)s)")
+    parser.add_argument('--threadedcg-core-num', type=parseIntCommaList, default=[0], help="Config the threaded cgroupv2 for scheduling experiments. 0 means to not use threadedcg and use all available cores. Positive number means how many cpu cores to be grouped together? (default: [0])")
     return parser.parse_args()
 
-def launchTest(args, package: str, ncores: int, oversub: int, trialID: int, threadedCG: Optional[ThreadedCG] = None):
+def launchTest(args, package: str, ncores: int, oversub: int, trialID: int, threadedCG: Optional[ThreadedCG]):
+   # threadedCG: Optional[ThreadedCG] = None):
     """
     @param package the name of the parsec package you want to run
     @param ncores how many logical CPU cores should be allocated
@@ -84,14 +84,14 @@ def launchTest(args, package: str, ncores: int, oversub: int, trialID: int, thre
     2. PERFCMD can be called without user interaction (e.g., no sudo prompt)
        sample sudoers: "${USER} ALL=(root:root) NOPASSWD:/usr/bin/perf, NOPASSWD:/usr/bin/chown"
     """
-    parsec = ParsecRun(args, package, ncores, oversub, trialID)
+    nCoresPercg = threadedCG.noresPercg if threadedCG else ncores
+    parsec = ParsecRun(args, package, ncores, oversub, trialID, nCoresPercg)
     if args.profiler is None:
         # timer related prefix will break the pidpath functionality (the timing measurement process will override the actual app process)
         parsec.setTimeAsPrefix()
     if not args.dryrun:
         parsec.runDetached()
-        if args.threadedcg:
-            assert(threadedCG is not None)
+        if threadedCG:
             pid = parsec.getPid()
             threadedCG.trackPID(pid)
             parsec.waitUntilTIDStabilized()
@@ -113,15 +113,21 @@ def sweep(args, csvWriter, rowCallback: Callable[[], None]):
     """
     packages = args.packages.split(',')
     allConfs = args.cherrypick
-    # TODO: consider adding threadedcg_core_num to this allConfs product, then I can collect csv automatically and compare against different setups
     if args.cores is not None and args.oversub is not None:
-        allConfs += list(itertools.product(args.cores, args.oversub))
+        allConfs += list(itertools.product(args.cores, args.oversub, args.threadedcg_core_num))
     for p in packages:
-        for (ncores, oversub) in allConfs:
+        for (ncores, oversub, nCoresPercg) in allConfs:
             for trialID in range(args.ntrials):
-                threadedCG = None
-                if args.threadedcg:
-                    threadedCG = ThreadedCG(args.threadedcg_path, args.threadedcg_core_num, ncores, args.numamem)
+                # want to reuse threadedCG across runs
+                if nCoresPercg >= ncores:
+                    print(f"WARNING: skip invalid config (nCoresPercg >= ncores): {ncores} ncores, {oversub} oversub, {nCoresPercg} nCoresPercg")
+                    continue
+                elif nCoresPercg > 0:
+                    threadedCG = ThreadedCG(args.threadedcg_path, nCoresPercg, ncores, args.numamem)
+                elif nCoresPercg == 0:
+                    threadedCG = None
+                else:
+                    raise RuntimeError(f"Invalid nCoresPercg {nCoresPercg}")
                 try:
                     launchTest(args, p, ncores, oversub, trialID, threadedCG)
                 except Exception as e:

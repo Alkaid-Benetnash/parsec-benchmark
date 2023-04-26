@@ -20,6 +20,7 @@ class ThreadedCG(object):
     def __init__(self, cgname: str, ncoresPercg: int, ncores: int, numanode: int, subcgPrefix: str = "vnuma"):
         self.cgroupSubRoot = Path('/sys/fs/cgroup') / cgname
         assert ncores % ncoresPercg == 0, "Only support the same number of cores among threaded subcgroups"
+        self.noresPercg = ncoresPercg
         self.numcgroups = ncores // ncoresPercg
         assert self.numcgroups < 100, "Only reserve two characters for the threaded subcgroup sequence number"
         print(

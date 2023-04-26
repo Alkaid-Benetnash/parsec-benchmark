@@ -13,12 +13,13 @@ from utils import getTIDofPID, getNowTSEscaped
 
 
 class ParsecRun(object):
-    def __init__(self, args, package: str, ncores: int, oversub: int, trialID: int):
+    def __init__(self, args, package: str, ncores: int, oversub: int, trialID: int, nCoresPercg: int):
         self.args = args
         self.package = package
         self.ncores = ncores
         self.oversub = oversub
         self.trialID = trialID
+        self.nCoresPercg = nCoresPercg
         self.numamem = self.args.numamem
         self.pidfile = tempfile.NamedTemporaryFile(mode="w+")
         self.pid: Optional[int] = None
@@ -36,7 +37,7 @@ class ParsecRun(object):
 
     def setTimeAsPrefix(self):
         non_timer_prefix = [f'{self.ncores}',
-                            f'{self.ncores * self.oversub}', f'{self.getCGCFG()}', f'{self.trialID}']
+                            f'{self.ncores * self.oversub}', f'{self.nCoresPercg}', f'{self.trialID}']
         timer_fmt_str = ','.join(
             non_timer_prefix + [f'%{f.timeFMT}' for f in ALLGNUTIMEFIELDS])
         timer_cmd = f"/usr/bin/time -o {self.args.time_temp} -f {timer_fmt_str}"
@@ -103,14 +104,11 @@ class ParsecRun(object):
         print(f"Consider {nTh} threads in {self.package} to be stable")
         self.tidStabilized = True
 
-    def getCGCFG(self) -> int:
-        return self.args.threadedcg_core_num if self.args.threadedcg else 0
-
     def getIdentifier(self, timestamped=True) -> str:
         """
         Generate a timestamped (optional) identifier that encodes the name, config, etc. of the current parsec run.
         """
-        plain_identifier = f"{self.package}.C{self.ncores}.O{self.oversub}.CG{self.getCGCFG()}"
+        plain_identifier = f"{self.package}.C{self.ncores}.O{self.oversub}.CG{self.nCoresPercg}"
         if timestamped:
             return f"{plain_identifier}.{getNowTSEscaped()}"
         else:
