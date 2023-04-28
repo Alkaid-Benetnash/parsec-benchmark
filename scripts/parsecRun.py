@@ -9,7 +9,7 @@ import subprocess
 import os
 from datetime import datetime, timedelta
 import time
-from utils import getTIDofPID, getNowTSEscaped
+from utils import getTIDofPID, getCHPIDofPPID, getNowTSEscaped
 
 
 class ParsecRun(object):
@@ -34,8 +34,11 @@ class ParsecRun(object):
             self.cmd += ["-k", "--unpack"]
         # track whether the number of threads have become stable
         self.tidStabilized = False
+        # track whether this parsec task has any "prefix command" that affects the pid selection
+        self.hasPrefixCMD = False
 
     def setTimeAsPrefix(self):
+        self.hasPrefixCMD = True
         non_timer_prefix = [f'{self.ncores}',
                             f'{self.ncores * self.oversub}', f'{self.nCoresPercg}', f'{self.trialID}']
         timer_fmt_str = ','.join(
@@ -70,9 +73,14 @@ class ParsecRun(object):
                 time.sleep(0.5)  # wait for the pidpath file to be ready
                 continue
             break
+        # Search one more layer if there is a prefix command
+        if self.hasPrefixCMD:
+            pids = getCHPIDofPPID(pid)
+            assert (len(pids) == 1), "The PrefixCMD spawns more than one child, unexpected"
+            pid = pids[0]
         # check whether the pid is valid
         if pid is None:
-            raise NotImplementedError("pidfile time out")
+            raise NotImplementedError("pidfile time out?")
         else:
             try:
                 os.kill(pid, 0)
@@ -100,7 +108,7 @@ class ParsecRun(object):
                 nThStayStable = 0
                 nTh = nThNew
                 print(f"wait for {nTh} threads in {self.package} to become stable")
-                time.sleep(pollIntervalSec)
+            time.sleep(pollIntervalSec)
         print(f"Consider {nTh} threads in {self.package} to be stable")
         self.tidStabilized = True
 

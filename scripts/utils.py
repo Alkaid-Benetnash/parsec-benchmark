@@ -6,13 +6,28 @@ from pathlib import Path
 import os
 from datetime import datetime
 
+DEBUGPS = False
 
 def getTIDofPID(pid: int) -> List[int]:
     """
     return a list of thread ID for a given process ID
     """
+    return callPS(f"-L -o tid --no-headers --pid {pid}")
+
+def getCHPIDofPPID(ppid: int) -> List[int]:
+    """
+    return a list of process ID for a given process ID
+    """
+    return callPS(f"-o pid --no-headers --ppid {ppid}")
+
+def callPS(cmdline: str) -> List[int]:
+    """Dumb helper"""
+    if DEBUGPS:
+        print(f"calling ps {cmdline}")
     ps = subprocess.run(shlex.split(
-        f"ps -L -o tid --no-headers {pid}"), capture_output=True, text=True)
+        f"ps {cmdline}"), capture_output=True, text=True)
+    if DEBUGPS:
+        print(f"return: {ps.stdout}")
     return [int(tid) for tid in ps.stdout.splitlines()]
 
 

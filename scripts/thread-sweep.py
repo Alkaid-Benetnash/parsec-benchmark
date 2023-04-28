@@ -54,6 +54,8 @@ def buildParser():
                         help="The numa node to allocate memory from. Passed to parsecmgmt (default: %(default)s)")
     parser.add_argument('--rundir', '-d', type=str, default="/tmp/parsec_sweep",
                         help="The root directory to run the benchmark. This is passed to `parsecmgmt` (default: %(default)s)")
+    parser.add_argument('-t', '--time-csv', action="store_true",
+                        help="Use /usr/bin/time to trace parsec executions and generate a csv.")
     parser.add_argument('--time-temp', type=str, default="/tmp/time.temp",
                         help="A temporary file that stores intermediate results reported by the /usr/bin/time (default: %(default)s)")
     parser.add_argument('--output', '-o', type=str, default="sweep.csv",
@@ -86,8 +88,7 @@ def launchTest(args, package: str, ncores: int, oversub: int, trialID: int, thre
     """
     nCoresPercg = threadedCG.noresPercg if threadedCG else ncores
     parsec = ParsecRun(args, package, ncores, oversub, trialID, nCoresPercg)
-    if args.profiler is None:
-        # timer related prefix will break the pidpath functionality (the timing measurement process will override the actual app process)
+    if args.time_csv:
         parsec.setTimeAsPrefix()
     if not args.dryrun:
         parsec.runDetached()
@@ -133,7 +134,7 @@ def sweep(args, csvWriter, rowCallback: Callable[[], None]):
                 except Exception as e:
                     print(f"WARNING: experiment {p} with C{ncores}.O{oversub} at trial.{trialID} failed with exception: {e}")
                     continue
-                if not args.dryrun and args.profiler is None:
+                if not args.dryrun and args.time_csv:
                     with open(args.time_temp, "r") as f:
                         record_dict = {}
                         time_records = f.read().strip().split(',')
