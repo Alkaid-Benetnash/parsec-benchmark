@@ -5,7 +5,8 @@ from datetime import datetime
 import textwrap
 import shlex
 import random
-from utils import getTIDofPID, sudochown
+from pathlib import Path
+from utils import getTIDofPID, sudochown, sudokill
 from parsecRun import ParsecRun
 
 PERFCMD = ['sudo', '/usr/bin/perf']
@@ -150,5 +151,35 @@ class PerfDebuggingProfiler(Profiler):
         return None
 
 
-ALL_PROFILER = [PerfStatProfiler, PerfSchedProfiler, PerfDebuggingProfiler]
+class PerfBCCRunqlatProfiler(Profiler):
+    name: str = "runqlat-bcc"
+    BIN: Path = Path('/usr/sbin/runqlat')
+
+    def __init__(self, args, parsec: ParsecRun):
+        super().__init__(args, parsec)
+        assert (self.BIN.exists()), f"Invalid bcc {str(self.BIN)}"
+
+    @classmethod
+    def getHelp(cls) -> str:
+        return textwrap.dedent('''\
+            Call BPF program runqlat (sudo required) to profile.
+            This profiler will be detached and rely on the callback to stop.
+            Args: None
+            ''')
+    @classmethod
+    def getDefaultArgs(cls) -> Dict[str, Any]:
+        return {}
+
+    def run(self) -> None:
+        outputPath = f"{self.parsec.getIdentifier()}.runqlat.txt"
+        self.outputFile = open(outputPath, "w")
+        self.process = subprocess.Popen(shlex.split(f"sudo {str(self.BIN)} -p {self.parsec.getPid()}"), stdout=self.outputFile, text=True)
+
+    def callback(self) -> None:
+        sudokill(self.process.pid, "SIGINT")
+        self.process.wait()
+        self.outputFile.close()
+
+
+ALL_PROFILER = [PerfStatProfiler, PerfSchedProfiler, PerfBCCRunqlatProfiler, PerfDebuggingProfiler]
 PROFILER_NAMEMAP = {p.name: p for p in ALL_PROFILER}

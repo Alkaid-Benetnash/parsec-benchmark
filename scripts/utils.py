@@ -109,5 +109,8 @@ def sudotee(path: str | Path, input: str, output=subprocess.DEVNULL):
     if len(errs) > 0:
         print(f"sudotee, stderr: {errs}")
 
+def sudokill(pid: int, signal: str):
+    subprocess.run(shlex.split(f"sudo /usr/bin/kill -{signal} {pid}"))
+
 def getNowTSEscaped() -> str:
     return f"{datetime.now().isoformat(timespec='seconds').replace(':','_')}"
