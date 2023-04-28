@@ -13,6 +13,14 @@ from utils import getTIDofPID, getCHPIDofPPID, getNowTSEscaped
 
 
 class ParsecRun(object):
+
+    waitUntilTIDStabilizedPollIntervalSecDefault = 0.5
+    waitUntilTIDStabilizedPollIntervalSecDict = {
+        "dedup": 0.1
+    }
+    waitUntilTIDStabilizedThresholdDefault = 3
+    waitUntilTIDStabilizedThreadholdDict = {}
+
     def __init__(self, args, package: str, ncores: int, oversub: int, trialID: int, nCoresPercg: int):
         self.args = args
         self.package = package
@@ -89,14 +97,24 @@ class ParsecRun(object):
                 raise e
         self.pid = pid
         return self.pid
-    
-    def waitUntilTIDStabilized(self, pollIntervalSec: float = 1.0, stableThreshold: int = 3):
+
+    def getTIDStabilizedPollIntervalSec(self):
+        return self.waitUntilTIDStabilizedPollIntervalSecDict.get(self.package, self.waitUntilTIDStabilizedPollIntervalSecDefault)
+
+    def getTIDStabilizedThreshold(self):
+        return self.waitUntilTIDStabilizedThreadholdDict.get(self.package, self.waitUntilTIDStabilizedThresholdDefault)
+
+    def waitUntilTIDStabilized(self, pollIntervalSec: Optional[float] = None, stableThreshold: Optional[int] = None):
         """
         Some profilers are supposed to be attached when the total number of threads stay stable
         Stable is defined as the total number of threads stay the same for {nThStayStableThreshold}*{pollInterval} time
         """
         if self.tidStabilized:
             return
+        if pollIntervalSec is None:
+            pollIntervalSec = self.getTIDStabilizedPollIntervalSec()
+        if stableThreshold is None:
+            stableThreshold = self.getTIDStabilizedThreshold()
         pid = self.getPid()
         nThStayStable = 0
         nTh = len(getTIDofPID(pid))
