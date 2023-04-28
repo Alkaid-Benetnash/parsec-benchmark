@@ -40,10 +40,6 @@ class ThreadedCG(object):
             self.cgroupSubRoot / "cgroup.subtree_control", "+cpuset")
         self.ensureCGExactContent(
             self.cgroupSubRoot / "cgroup.type", "threaded")
-        cgroupSubRootCoreList = getCoreList(ncores, numanode)
-        cgroupSubRootCoreListStr = getCoreListStr(ncores, numanode)
-        self.ensureCGExactContent(
-            self.cgroupSubRoot / "cpuset.cpus", cgroupSubRootCoreListStr)
         # handle the sub-cgroups. each of which represents a smaller core-group that enforces a certain level of locality
         self.subcgNames = [
             f"{subcgPrefix}.{str(i).zfill(2)}" for i in range(self.numcgroups)]
@@ -51,15 +47,27 @@ class ThreadedCG(object):
             subcgPath = self.cgroupSubRoot / subcgName
             if not subcgPath.exists():
                 subcgPath.mkdir()
+            # Force clean existing cpuset configs of sub-cgroups.
+            # This is necessary before adjusting the subRoot cpuset.cpus
+            # Otherwise, a larget cpuset assigned to sub-cgroup can prevent the update of the subRoot
+            self.ensureCGExactContent(subcgPath/"cpuset.cpus", "\n", True)
+        # remove old subcg ({subcgPrefix}.i) that are not used in the latest cofiguration
+        for subcgPath in self.cgroupSubRoot.glob(f"{subcgPrefix}.*"):
+            if subcgPath.name not in self.subcgNames:
+                subcgPath.rmdir()
+        ## With sub-cgroup cpuset.cpus cleared, we first update the subRoot
+        cgroupSubRootCoreListStr = getCoreListStr(ncores, numanode)
+        self.ensureCGExactContent(
+            self.cgroupSubRoot / "cpuset.cpus", cgroupSubRootCoreListStr)
+        ## Then we continue config the correct cpuset.cpus for each subcg
+        cgroupSubRootCoreList = getCoreList(ncores, numanode)
+        for cgId, subcgName in enumerate(self.subcgNames):
+            subcgPath = self.cgroupSubRoot / subcgName
             self.ensureCGExactContent(subcgPath/"cgroup.type", "threaded")
             subcgFirstCoreID = cgId * ncoresPercg
             subcgCoreList = cgroupSubRootCoreList[subcgFirstCoreID: subcgFirstCoreID + ncoresPercg]
             self.ensureCGExactContent(
                 subcgPath/"cpuset.cpus", ','.join([str(x) for x in subcgCoreList]))
-        # remove old subcg ({subcgPrefix}.i) that are not used in the latest cofiguration
-        for subcgPath in self.cgroupSubRoot.glob(f"{subcgPrefix}.*"):
-            if subcgPath.name not in self.subcgNames:
-                subcgPath.rmdir()
 
     def trackPID(self, pid: int):
         sudotee(self.cgroupSubRoot / "cgroup.procs", str(pid))
@@ -102,6 +110,14 @@ class ThreadedCG(object):
         return isEnforced
 
     @classmethod
-    def ensureCGExactContent(cls, path: str | Path, enforcedContent: str) -> bool:
-        cls.ensureCGContent(path, lambda s: s ==
-                            enforcedContent, enforcedContent)
+    def ensureCGExactContent(cls, path: str | Path, enforcedContent: str, forced: bool = False) -> None:
+        """
+        If forced, then unconditionally overwrite the given path with the enforcedContent.
+        If not forced, will check whether the existing content match before write it.
+        """
+        if forced:
+            with open(path, "w") as f:
+                f.write(enforcedContent)
+        else:
+            cls.ensureCGContent(path, lambda s: s ==
+                                   enforcedContent, enforcedContent)
